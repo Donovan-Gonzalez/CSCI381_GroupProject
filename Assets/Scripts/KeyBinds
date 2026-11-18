@@ -1,0 +1,21 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+public static class KeyBinds
+{ 
+        // one key: pass it straight to the constructor
+    public static InputAction Primary = new InputAction("Primary", binding: "<Mouse>/leftButton");
+    public static InputAction Secondary = new InputAction("Secondary", binding: "<Mouse>/rightButton");
+
+    // several keys: add the extras in Init()
+    public static InputAction Pause = new InputAction("Pause", binding: "<Keyboard>/p");
+
+    public InputAction[] binds = {};
+    public static void Init()
+    {
+        Pause.AddBinding("<Keyboard>/escape");
+        Pause.Enable();
+        Primary.Enable();
+        
+    }
+}
