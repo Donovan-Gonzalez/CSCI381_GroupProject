@@ -14,8 +14,10 @@ public class GameBootstrap : MonoBehaviour
         }
 
         cam.orthographic = true;
-        cam.orthographicSize = 5.5f;
-        cam.transform.position = new Vector3(0f, -1f, -10f);
+        // Zoomed out a bit and shifted down so the whole room sits above the taller bottom HUD
+        // (the equipment cross needs ~196 of the 720 virtual pixels).
+        cam.orthographicSize = 7.5f;
+        cam.transform.position = new Vector3(0f, -2.07f, -10f);
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(0.04f, 0.04f, 0.06f);
 

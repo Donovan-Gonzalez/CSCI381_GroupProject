@@ -3,32 +3,51 @@ using UnityEngine;
 
 // ---------------------------------------------------------------------------
 //  All the "design data" lives here so teammates can tune it in one place:
-//  weapons, functions, techniques, and the characters.
+//  weapons, their actions, elements, and the characters.
+//
+//  Progression inside one stage (per weapon):
+//    start        -> pick a primary weapon (it uses its default action)
+//    room 1 clear -> pick an ACTION (keep the default, or switch to one of the two alternates).
+//                    The action decides the weapon's attack style from then on.
+//    room 2 clear -> pick an ELEMENT (Ignite or Chill)
+//    room 3 clear -> get the other ELEMENT
+//    boss clear   -> pick a SECONDARY weapon from the class's other weapons
+//  In game: Left / Right = switch weapon, Up / Down = switch element (none / Ignite / Chill).
 // ---------------------------------------------------------------------------
 
-public enum Attr { Slash, Puncture, Fire, Frozen }          // function attributes (used to hit weaknesses)
-public enum FnKind { Arc, Projectile, Volley, Block }       // how a function behaves
-public enum HeroAbility { Dash, Surge }                     // character abilities
+public enum Attr { Slash, Puncture, Fire, Frozen }               // attack attributes (used to hit weaknesses)
+public enum FnKind { Arc, Thrust, Projectile, Volley, Boomerang, Rain }   // how an action behaves
+public enum ShotLook { Orb, Arrow, Knife, Crescent, Axe }        // how a projectile looks
+public enum HeroAbility { Dash, Surge }                          // character abilities
 
-// A function = what a weapon does (Swing, Shot, Block ...). Each has stats + attributes.
+// One attack ("action"): stats + attributes. Attacks fire automatically at the nearest enemy.
 public class FunctionDef
 {
     public string name;
+    public string desc;
     public FnKind kind;
+    public ShotLook look;
     public float damage;
-    public float reach;       // melee arc reach (world units)
-    public float arc;         // melee arc angle (degrees)
+    public float reach;       // melee reach (world units)
+    public float arc;         // Arc: angle in degrees (360 = full circle)
+    public float width;       // Thrust: half-width of the stab line
     public float speed;       // projectile speed
+    public float range;       // ranged: how close an enemy must be before the hero auto-fires
     public float cooldown;
-    public float stamina;
-    public float radius;      // projectile radius
-    public float aoe;         // explosion radius (0 = none)
+    public float radius;      // projectile hit radius
+    public float aoe;         // Rain: circle radius
     public int pierce;        // extra enemies a projectile can pass through
+    public int count = 1;     // Volley: number of projectiles
+    public float spread;      // Volley: degrees between projectiles
+    public float duration;    // Rain: how long the zone lasts (seconds)
+    public float tick;        // Rain: seconds between damage ticks
     public List<Attr> attrs = new List<Attr>();
+    public int element = -1;  // -1 = no element, otherwise index into CombatData.ElementNames
 
-    public bool special;      // true when a technique changed this function
-    public bool chargeable;   // Charge technique: hold the button, release to fire
-    public bool noCombo;      // a technique is equipped but doesn't combine with this function
+    public bool IsMelee { get { return kind == FnKind.Arc || kind == FnKind.Thrust; } }
+
+    // the distance at which the hero starts attacking an enemy
+    public float EngageRange { get { return IsMelee ? reach : range; } }
 
     public FunctionDef Clone()
     {
@@ -38,37 +57,150 @@ public class FunctionDef
     }
 }
 
+public class WeaponDef
+{
+    public string name;
+    public string blurb;            // shown on the weapon pick / reward screens
+    public FunctionDef[] actions;   // [0] = default action, [1] and [2] = learnable alternates
+}
+
 public class CharacterDef
 {
     public string name;
     public string blurb;
     public Color color;
-    public int weapon;        // starting weapon index
-    public int tech;          // starting technique index
+    public int[] weapons;           // the class's weapons (index into CombatData.Weapons); pick 1 at the start
     public HeroAbility ability;
 }
 
 public static class CombatData
 {
-    public static readonly string[] WeaponNames = { "Sword & Shield", "Bow", "Staff" };
-    public static readonly string[] TechNames = { "None", "Charge", "Ignite", "Chill" };
+    // ----- Elements (rewarded in rooms 2 and 3). Fire = burn over time, Frozen = slow. -----
+    public static readonly string[] ElementNames = { "Ignite", "Chill" };
+    public static readonly Attr[] ElementAttrs = { Attr.Fire, Attr.Frozen };
+    static readonly string[] ElementPrefix = { "Flame", "Frost" };
+    public static readonly string[] ElementEffect = { "FIRE: burns for 3s", "FROZEN: slows for 2.5s" };
 
-    // ----- Characters (each starts with a different loadout and ability) -----
+    public const float BurnDps = 4f;
+    public const float BurnTime = 3f;
+    public const float SlowTime = 2.5f;
+
+    // ----- helpers to build actions -----
+    static FunctionDef ArcFn(string name, string desc, float dmg, float reach, float arc, float cd, params Attr[] a)
+    {
+        FunctionDef f = new FunctionDef { name = name, desc = desc, kind = FnKind.Arc, damage = dmg, reach = reach, arc = arc, cooldown = cd };
+        f.attrs.AddRange(a);
+        return f;
+    }
+
+    static FunctionDef ThrustFn(string name, string desc, float dmg, float reach, float halfWidth, float cd, params Attr[] a)
+    {
+        FunctionDef f = new FunctionDef { name = name, desc = desc, kind = FnKind.Thrust, damage = dmg, reach = reach, width = halfWidth, cooldown = cd };
+        f.attrs.AddRange(a);
+        return f;
+    }
+
+    static FunctionDef ShotFn(string name, string desc, ShotLook look, float dmg, float speed, float range, float radius,
+                              int pierce, float cd, params Attr[] a)
+    {
+        FunctionDef f = new FunctionDef
+        {
+            name = name, desc = desc, kind = FnKind.Projectile, look = look, damage = dmg, speed = speed,
+            range = range, radius = radius, pierce = pierce, cooldown = cd
+        };
+        f.attrs.AddRange(a);
+        return f;
+    }
+
+    // Weapon ids (index into Weapons)
+    public const int Sword = 0, Axe = 1, Dagger = 2, Bow = 3;
+
+    public static readonly WeaponDef[] Weapons =
+    {
+        // ---------- Sword: fast, straight stab ----------
+        new WeaponDef
+        {
+            name = "Sword",
+            blurb = "Fast, straight THRUST that pierces a whole line.\nActions to learn: Swing (fan) / Sword Wave (ranged crescent)",
+            actions = new[]
+            {
+                ThrustFn("Thrust", "Straight stab that pierces every enemy in a line", 12f, 2.3f, 0.35f, 0.38f, Attr.Puncture),
+                ArcFn("Swing", "Fan-shaped slash in front of you", 11f, 1.8f, 120f, 0.42f, Attr.Slash),
+                ShotFn("Sword Wave", "Crescent wave that flies through enemies", ShotLook.Crescent, 10f, 9f, 7.5f, 0.45f, 99, 0.7f, Attr.Slash)
+            }
+        },
+        // ---------- Axe: slow, big area ----------
+        new WeaponDef
+        {
+            name = "Axe",
+            blurb = "Slow, heavy SWING that hits a wide fan.\nActions to learn: Spin (full circle) / Axe Throw (comes back)",
+            actions = new[]
+            {
+                ArcFn("Swing", "Wide, heavy chop in front of you", 22f, 2.1f, 150f, 0.95f, Attr.Slash),
+                ArcFn("Spin", "Spin attack that hits everything around you", 18f, 2.2f, 360f, 1.05f, Attr.Slash),
+                new FunctionDef
+                {
+                    name = "Axe Throw", desc = "Thrown axe that flies out and returns to you", kind = FnKind.Boomerang,
+                    look = ShotLook.Axe, damage = 16f, speed = 10f, range = 5.5f, radius = 0.35f, pierce = 99,
+                    cooldown = 1.3f, attrs = new List<Attr> { Attr.Slash }
+                }
+            }
+        },
+        // ---------- Dagger: very fast, short range ----------
+        new WeaponDef
+        {
+            name = "Dagger",
+            blurb = "Very fast, short-range SWING (small fan).\nActions to learn: Stab (straight thrust) / Knife Throw (ranged)",
+            actions = new[]
+            {
+                ArcFn("Swing", "Quick, short slash in front of you", 7f, 1.35f, 100f, 0.22f, Attr.Slash),
+                ThrustFn("Stab", "Quick straight stab that pierces a short line", 8f, 2.0f, 0.25f, 0.22f, Attr.Puncture),
+                ShotFn("Knife Throw", "Throws a fast knife at range", ShotLook.Knife, 7f, 15f, 8f, 0.12f, 0, 0.32f, Attr.Puncture)
+            }
+        },
+        // ---------- Bow: medium speed, ranged ----------
+        new WeaponDef
+        {
+            name = "Bow",
+            blurb = "Medium-speed single SHOT with high damage.\nActions to learn: Triple Shot (fan of 3) / Arrow Rain (area)",
+            actions = new[]
+            {
+                ShotFn("Shot", "One arrow, high single-target damage", ShotLook.Arrow, 16f, 14f, 10f, 0.12f, 0, 0.6f, Attr.Puncture),
+                new FunctionDef
+                {
+                    name = "Triple Shot", desc = "Three arrows in a fan - damage is spread out", kind = FnKind.Volley,
+                    look = ShotLook.Arrow, damage = 7f, speed = 13f, range = 9f, radius = 0.12f, count = 3, spread = 14f,
+                    cooldown = 0.7f, attrs = new List<Attr> { Attr.Puncture }
+                },
+                new FunctionDef
+                {
+                    name = "Arrow Rain", desc = "Arrows keep raining on a circle - damages everything inside over time", kind = FnKind.Rain,
+                    damage = 3f, tick = 0.4f, duration = 2.4f, range = 8f, aoe = 1.9f, cooldown = 1.6f,
+                    attrs = new List<Attr> { Attr.Puncture }
+                }
+            }
+        }
+    };
+
+    // ----- Characters: each class has its own weapons; the player picks one as the primary -----
+    // TODO (design): each class should get a 3rd weapon so the boss reward is a real choice of 2.
     public static readonly CharacterDef[] Roster =
     {
         new CharacterDef
         {
             name = "Vanguard",
-            blurb = "Sword & Shield + Charge.\nAbility: Dash (2 charges that refill).\nDash then Swing = Dash Slash.",
+            blurb = "Weapons: Sword / Axe\nAbility: Dash (2 charges that refill).\nDash, then a melee hit = Dash Slash.",
             color = new Color(0.30f, 0.65f, 1f),
-            weapon = 0, tech = 1, ability = HeroAbility.Dash
+            weapons = new[] { Sword, Axe },
+            ability = HeroAbility.Dash
         },
         new CharacterDef
         {
             name = "Ember",
-            blurb = "Bow + Ignite (fire arrows).\nAbility: Surge (4s of fast cooldowns\nand stamina regen, then a long cooldown).",
+            blurb = "Weapons: Bow / Dagger\nAbility: Surge (4s of much faster attacks,\nthen a long cooldown).",
             color = new Color(1f, 0.55f, 0.20f),
-            weapon = 1, tech = 2, ability = HeroAbility.Surge
+            weapons = new[] { Bow, Dagger },
+            ability = HeroAbility.Surge
         }
     };
 
@@ -94,80 +226,30 @@ public static class CombatData
         }
     }
 
-    // ----- Base functions: [weapon, 0 = primary / 1 = secondary] -----
-    static FunctionDef Fn(string name, FnKind kind, float dmg, float reach, float arc, float speed,
-                          float cd, float stam, float radius, params Attr[] attrs)
+    // Final attack = the weapon's chosen action, plus an element (-1 = none).
+    public static FunctionDef Resolve(int weaponId, int action, int element)
     {
-        FunctionDef f = new FunctionDef();
-        f.name = name; f.kind = kind; f.damage = dmg; f.reach = reach; f.arc = arc; f.speed = speed;
-        f.cooldown = cd; f.stamina = stam; f.radius = radius;
-        f.attrs.AddRange(attrs);
+        FunctionDef f = Weapons[weaponId].actions[action].Clone();
+        if (element >= 0)
+        {
+            f.element = element;
+            f.name = ElementPrefix[element] + " " + f.name;
+            Attr add = ElementAttrs[element];
+            if (!f.attrs.Contains(add)) f.attrs.Add(add);
+        }
         return f;
     }
 
-    static readonly FunctionDef[,] baseFns =
+    // "DMG 12 · RCH 2.3 · CD 0.38s" style summary used by the HUD and reward cards
+    public static string StatLine(FunctionDef f)
     {
-        // Sword & Shield
-        { Fn("Swing", FnKind.Arc, 18f, 1.7f, 110f, 0f, 0.42f, 12f, 0f, Attr.Slash),
-          Fn("Block", FnKind.Block, 0f, 0f, 0f, 0f, 0f, 0f, 0f) },
-        // Bow
-        { Fn("Shot", FnKind.Projectile, 14f, 0f, 0f, 13f, 0.50f, 10f, 0.12f, Attr.Puncture),
-          Fn("Volley", FnKind.Volley, 8f, 0f, 0f, 12f, 1.10f, 24f, 0.11f, Attr.Puncture) },
-        // Staff
-        { Fn("Fire Bolt", FnKind.Projectile, 16f, 0f, 0f, 9.5f, 0.60f, 14f, 0.20f, Attr.Fire),
-          Fn("Frost Shard", FnKind.Projectile, 8f, 0f, 0f, 10.5f, 0.45f, 11f, 0.15f, Attr.Frozen) }
-    };
-
-    // Applies the equipped technique to a weapon function and returns the final function.
-    //   slot: 0 = primary, 1 = secondary.   charged: only matters for the Charge technique.
-    public static FunctionDef Resolve(int weapon, int slot, int tech, bool charged)
-    {
-        FunctionDef f = baseFns[weapon, slot].Clone();
-
-        // Technique 1: Charge (primary only) -> hold to charge, release for a stronger version
-        if (tech == 1)
-        {
-            if (slot != 0) { f.noCombo = true; return f; }
-
-            f.chargeable = true;
-            f.special = true;
-            if (charged)
-            {
-                f.stamina *= 1.6f;
-                if (f.name == "Swing")
-                {
-                    f.name = "Charged Swing"; f.damage *= 2.2f; f.reach *= 1.4f; f.arc = 170f; f.cooldown *= 1.3f;
-                }
-                else if (f.name == "Shot")
-                {
-                    f.name = "Charged Shot"; f.damage *= 2.4f; f.speed = 20f; f.pierce = 3;
-                }
-                else if (f.name == "Fire Bolt")
-                {
-                    f.name = "Fireball"; f.damage *= 1.8f; f.aoe = 2.2f; f.radius = 0.35f;
-                }
-            }
-            return f;
-        }
-
-        // Techniques 2 and 3: Ignite / Chill -> add an attribute (and rename) when they combine
-        if (tech == 2 || tech == 3)
-        {
-            bool fire = (tech == 2);
-            string newName = null;
-
-            if (f.name == "Swing") newName = fire ? "Flame Swing" : "Frost Swing";
-            else if (f.name == "Shot") newName = fire ? "Fire Arrow" : "Ice Arrow";
-            else if (f.name == "Volley") newName = fire ? "Fire Volley" : "Ice Volley";
-
-            if (newName == null) { f.noCombo = true; return f; }   // e.g. Block, Fire Bolt, Frost Shard
-
-            f.name = newName;
-            Attr add = fire ? Attr.Fire : Attr.Frozen;
-            if (!f.attrs.Contains(add)) f.attrs.Add(add);
-            f.special = true;
-        }
-
-        return f;
+        string dmg = f.kind == FnKind.Volley ? f.count + "x" + f.damage.ToString("0")
+                   : f.kind == FnKind.Rain ? Mathf.RoundToInt(f.duration / f.tick) + "x" + f.damage.ToString("0")   // ticks x damage
+                   : f.damage.ToString("0");
+        string second;
+        if (f.kind == FnKind.Rain) second = "AOE " + f.aoe.ToString("0.#");
+        else if (f.IsMelee) second = "RCH " + f.reach.ToString("0.#");
+        else second = "RNG " + f.range.ToString("0.#");
+        return "DMG " + dmg + " · " + second + " · CD " + f.cooldown.ToString("0.0#") + "s";
     }
 }

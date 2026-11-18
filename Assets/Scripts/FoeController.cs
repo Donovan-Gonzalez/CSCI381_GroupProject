@@ -28,6 +28,7 @@ public class FoeController : MonoBehaviour
 
     float speed;
     float slowT, contactCd, shootT, windupT, flash, invuln;
+    float burnT, burnTick;          // Fire element: damage over time
     float strafeDir = 1f;
     bool dead;
     bool windingUp;
@@ -136,6 +137,18 @@ public class FoeController : MonoBehaviour
 
         float dt = Time.deltaTime;
         if (slowT > 0f) slowT -= dt;
+        if (burnT > 0f)
+        {
+            burnT -= dt;
+            burnTick -= dt;
+            if (burnTick <= 0f && invuln <= 0f)
+            {
+                burnTick = 0.5f;
+                float tick = CombatData.BurnDps * 0.5f;
+                HudView.Float(transform.position + Vector3.up * (radius + 0.3f), Mathf.RoundToInt(tick).ToString(), new Color(1f, 0.55f, 0.2f));
+                if (ApplyDamage(tick)) return;
+            }
+        }
         if (invuln > 0f) invuln -= dt;
         if (contactCd > 0f) contactCd -= dt;
         if (flash > 0f) flash -= dt;
@@ -209,6 +222,7 @@ public class FoeController : MonoBehaviour
         rb.linearVelocity = vel * (slowT > 0f ? 0.4f : 1f);
 
         if (flash > 0f) bodySr.color = Color.white;
+        else if (burnT > 0f) bodySr.color = Color.Lerp(baseColor, new Color(1f, 0.5f, 0.2f), 0.45f + 0.15f * Mathf.Sin(Time.time * 20f));
         else if (slowT > 0f) bodySr.color = Color.Lerp(baseColor, new Color(0.5f, 0.8f, 1f), 0.6f);
         else bodySr.color = baseColor;
 
@@ -260,14 +274,24 @@ public class FoeController : MonoBehaviour
         if (attrs.Count == 0) mult = 1f;
 
         float final = dmg * mult;
-        hp -= final;
         flash = 0.08f;
 
         if (mult >= 1.9f) HudView.Float(above, "WEAK! " + Mathf.RoundToInt(final), new Color(1f, 0.85f, 0.2f));
         else if (mult <= 0.5f) HudView.Float(above, "TOUGH " + Mathf.RoundToInt(final), new Color(0.7f, 0.7f, 0.75f));
         else HudView.Float(above, Mathf.RoundToInt(final).ToString(), Color.white);
 
-        if (attrs.Contains(Attr.Frozen)) slowT = 2.5f;     // Frozen = slows the target
+        // element special effects
+        if (attrs.Contains(Attr.Frozen)) slowT = CombatData.SlowTime;                    // Frozen = slows the target
+        if (attrs.Contains(Attr.Fire)) { if (burnT <= 0f) burnTick = 0.5f; burnT = CombatData.BurnTime; }   // Fire = burns
+
+        ApplyDamage(final);
+    }
+
+    // Removes hp, handles death and boss phases. Returns true if this foe died.
+    bool ApplyDamage(float final)
+    {
+        if (dead) return true;
+        hp -= final;
 
         if (hp <= 0f)
         {
@@ -275,7 +299,7 @@ public class FoeController : MonoBehaviour
             FadeSprite.Spawn(transform.position, Vector2.one * radius * 2.4f, new Color(baseColor.r, baseColor.g, baseColor.b, 0.7f), 0.35f, true);
             RoomDirector.Instance.FoeDied(this);
             Destroy(gameObject);
-            return;
+            return true;
         }
 
         // boss phases: every phase has a different weakness
@@ -292,5 +316,6 @@ public class FoeController : MonoBehaviour
                 Ring(12);
             }
         }
+        return false;
     }
 }

@@ -1,9 +1,11 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-public enum GState { Title, Playing, Paused, Win, Lose }
+public enum GState { Title, WeaponPick, Playing, Paused, Reward, Win, Lose }
 
-// Owns the game flow: title -> rooms (doors locked until enemies are cleared) -> boss -> win / game over.
+// Owns the game flow: title -> pick a hero -> pick a primary weapon -> rooms (doors locked until enemies are cleared)
+// -> boss -> win / game over. Clearing a room gives a reward (see CombatData for the progression).
 // Also builds the room geometry (floor, walls, door) from code.
 public class RoomDirector : MonoBehaviour
 {
@@ -12,6 +14,14 @@ public class RoomDirector : MonoBehaviour
         public string name;
         public string tip;
         public FoeType[] foes;
+    }
+
+    // one choice on the reward screen
+    public class RewardOption
+    {
+        public string title;
+        public string desc;
+        public System.Action apply;    // null = "keep what you have"
     }
 
     public static RoomDirector Instance { get; private set; }
@@ -27,25 +37,25 @@ public class RoomDirector : MonoBehaviour
         new RoomDef
         {
             name = "1-1  Training Hall",
-            tip = "BRUTES are armored: they resist SLASH but are weak to PUNCTURE. Press the RIGHT ARROW to equip the Bow!",
+            tip = "Your attacks fire AUTOMATICALLY at the nearest enemy - just move! BRUTES resist SLASH but are weak to PUNCTURE. Clear the room to learn a new ACTION.",
             foes = new[] { FoeType.Brute, FoeType.Brute }
         },
         new RoomDef
         {
             name = "1-2  Archery Gallery",
-            tip = "ARCHERS shrug off PUNCTURE but burn easily. Press UP/DOWN to equip IGNITE and add FIRE to your attacks!",
+            tip = "ARCHERS shrug off PUNCTURE but burn easily, and keep their distance. Clear the room to earn your first ELEMENT.",
             foes = new[] { FoeType.Archer, FoeType.Archer, FoeType.Brute }
         },
         new RoomDef
         {
             name = "1-3  Mage Sanctum",
-            tip = "MAGES resist FIRE but crumple to SLASH. Close the distance, use Sword & Shield, and BLOCK their orbs (hold right mouse).",
+            tip = "MAGES resist FIRE but crumple to SLASH. Their orbs aim where you're going - keep moving! Press UP / DOWN to switch element.",
             foes = new[] { FoeType.Mage, FoeType.Mage, FoeType.Archer }
         },
         new RoomDef
         {
             name = "BOSS  The Warden",
-            tip = "The Warden's weakness CHANGES each phase. Watch his glowing aura and the WEAK label, then switch weapons!",
+            tip = "The Warden's weakness CHANGES each phase. Watch his glowing aura and the WEAK label, then switch element with UP / DOWN!",
             foes = new[] { FoeType.Boss }
         }
     };
@@ -56,6 +66,16 @@ public class RoomDirector : MonoBehaviour
     public bool DoorOpen { get; private set; }
     public HeroController Hero { get; private set; }
     public int SelectedChar { get; private set; }
+    public int SelectedWeapon { get; private set; }     // index into the selected hero's CharacterDef.weapons
+
+    // reward screen
+    public string RewardTitle { get; private set; }
+    public string RewardSub { get; private set; }
+    public readonly List<RewardOption> RewardOptions = new List<RewardOption>();
+    public int RewardSel { get; private set; }
+    public string EarnedWeapon { get; private set; }    // shown on the win screen
+    GState afterReward;
+    bool rewardPending;     // a room reward is about to show: keep the door shut until it's picked
 
     GameObject doorObj;
     BoxCollider2D doorCol;
@@ -169,13 +189,47 @@ public class RoomDirector : MonoBehaviour
                 if (kb.digit2Key.wasPressedThisFrame) SelectedChar = 1;
                 if (kb.leftArrowKey.wasPressedThisFrame || kb.rightArrowKey.wasPressedThisFrame)
                     SelectedChar = (SelectedChar + 1) % CombatData.Roster.Length;
-                if (kb.enterKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame) StartGame();
+                if (kb.enterKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame)
+                {
+                    SelectedWeapon = 0;
+                    SetState(GState.WeaponPick);
+                }
                 break;
+
+            case GState.WeaponPick:
+            {
+                int n = CombatData.Roster[SelectedChar].weapons.Length;
+                if (kb.digit1Key.wasPressedThisFrame) SelectedWeapon = 0;
+                if (kb.digit2Key.wasPressedThisFrame && n > 1) SelectedWeapon = 1;
+                if (kb.rightArrowKey.wasPressedThisFrame) SelectedWeapon = (SelectedWeapon + 1) % n;
+                if (kb.leftArrowKey.wasPressedThisFrame) SelectedWeapon = (SelectedWeapon + n - 1) % n;
+                if (kb.escapeKey.wasPressedThisFrame || kb.backspaceKey.wasPressedThisFrame) SetState(GState.Title);
+                else if (kb.enterKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame) StartGame();
+                break;
+            }
+
+            case GState.Reward:
+            {
+                int n = RewardOptions.Count;
+                if (n == 0) { SetState(afterReward); break; }
+                if (kb.digit1Key.wasPressedThisFrame) RewardSel = 0;
+                if (kb.digit2Key.wasPressedThisFrame && n > 1) RewardSel = 1;
+                if (kb.digit3Key.wasPressedThisFrame && n > 2) RewardSel = 2;
+                if (kb.rightArrowKey.wasPressedThisFrame) RewardSel = (RewardSel + 1) % n;
+                if (kb.leftArrowKey.wasPressedThisFrame) RewardSel = (RewardSel + n - 1) % n;
+                if (kb.enterKey.wasPressedThisFrame)      // Enter only, so Space doesn't also trigger the ability
+                {
+                    RewardOption o = RewardOptions[RewardSel];
+                    if (o.apply != null) o.apply();
+                    SetState(afterReward);
+                }
+                break;
+            }
 
             case GState.Playing:
                 if (kb.pKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame) SetState(GState.Paused);
                 RoomTime += Time.deltaTime;
-                if (DoorOpen && Hero != null && Hero.transform.position.x > Center.x + RoomW / 2f + 0.3f) NextRoom();
+                if (DoorOpen && !rewardPending && Hero != null && Hero.transform.position.x > Center.x + RoomW / 2f + 0.3f) NextRoom();
                 break;
 
             case GState.Paused:
@@ -192,8 +246,11 @@ public class RoomDirector : MonoBehaviour
 
     void ClearWorld()
     {
+        CancelInvoke();         // drop any reward / win that was still scheduled
+        rewardPending = false;
         foreach (FoeController f in FindObjectsByType<FoeController>()) Destroy(f.gameObject);
         foreach (BoltProjectile b in FindObjectsByType<BoltProjectile>()) Destroy(b.gameObject);
+        foreach (AreaStrike a in FindObjectsByType<AreaStrike>()) Destroy(a.gameObject);
         if (Hero != null) Destroy(Hero.gameObject);
         Hero = null;
         HudView.ClearFloats();
@@ -205,7 +262,9 @@ public class RoomDirector : MonoBehaviour
 
         GameObject h = new GameObject("Hero");
         Hero = h.AddComponent<HeroController>();
-        Hero.Setup(CombatData.Roster[SelectedChar]);
+        CharacterDef c = CombatData.Roster[SelectedChar];
+        Hero.Setup(c, c.weapons[SelectedWeapon]);
+        EarnedWeapon = null;
 
         LoadRoom(0);
         SetState(GState.Playing);
@@ -218,6 +277,7 @@ public class RoomDirector : MonoBehaviour
 
         foreach (FoeController f in FindObjectsByType<FoeController>()) Destroy(f.gameObject);
         foreach (BoltProjectile b in FindObjectsByType<BoltProjectile>()) Destroy(b.gameObject);
+        foreach (AreaStrike a in FindObjectsByType<AreaStrike>()) Destroy(a.gameObject);
 
         Hero.transform.position = new Vector3(Center.x - RoomW / 2f + 1.5f, Center.y, 0f);
         SetDoor(false);
@@ -255,19 +315,109 @@ public class RoomDirector : MonoBehaviour
 
         if (RoomIndex == Rooms.Length - 1)
         {
-            Invoke("Win", 1.2f);                         // boss down -> win screen
+            Invoke("BossCleared", 1.2f);                 // boss down -> secondary weapon reward -> win screen
         }
         else
         {
             SetDoor(true);                               // room cleared -> unlock the door and heal a bit
             Hero.Heal(15f);
             HudView.Float(Hero.transform.position + Vector3.up * 1.6f, "DOOR UNLOCKED", new Color(0.5f, 1f, 0.6f));
+            rewardPending = true;
+            Invoke("RoomReward", 0.6f);
         }
     }
 
-    void Win()
+    // ---------------------------------------------------------------- rewards
+    void OfferReward(string title, string sub, List<RewardOption> options, GState after)
     {
-        if (State == GState.Playing) SetState(GState.Win);
+        RewardTitle = title;
+        RewardSub = sub;
+        RewardOptions.Clear();
+        RewardOptions.AddRange(options);
+        RewardSel = 0;
+        afterReward = after;
+        SetState(options.Count > 0 ? GState.Reward : after);
+    }
+
+    // room 1 -> an ACTION for the primary weapon, rooms 2 and 3 -> an ELEMENT
+    void RoomReward()
+    {
+        rewardPending = false;
+        if (State != GState.Playing || Hero == null) return;
+
+        HeroController.OwnedWeapon w = Hero.Weapons[0];
+        WeaponDef wd = w.Def;
+        List<RewardOption> opts = new List<RewardOption>();
+
+        if (RoomIndex == 0)
+        {
+            for (int i = 1; i < wd.actions.Length; i++)
+            {
+                int a = i;      // copy for the closure
+                FunctionDef f = wd.actions[a];
+                opts.Add(new RewardOption
+                {
+                    title = f.name,
+                    desc = f.desc + "\n" + CombatData.StatLine(f) + "\n" + AttrList(f),
+                    apply = () => Hero.SetAction(0, a)
+                });
+            }
+            FunctionDef d = wd.actions[0];
+            opts.Add(new RewardOption
+            {
+                title = "Keep " + d.name,
+                desc = d.desc + "\n" + CombatData.StatLine(d) + "\n" + AttrList(d),
+                apply = null
+            });
+            OfferReward("ROOM CLEARED  -  CHOOSE AN ACTION",
+                        "This decides how your " + wd.name + " attacks for the rest of the run.", opts, GState.Playing);
+        }
+        else
+        {
+            for (int e = 0; e < CombatData.ElementNames.Length; e++)
+            {
+                if (w.elements.Contains(e)) continue;
+                int el = e;
+                FunctionDef f = CombatData.Resolve(w.id, w.action, el);
+                opts.Add(new RewardOption
+                {
+                    title = CombatData.ElementNames[el],
+                    desc = "Adds " + CombatData.ElementEffect[el] + "\nYour attack becomes: " + f.name + "\nSwitch with UP / DOWN",
+                    apply = () => Hero.AddElement(0, el)
+                });
+            }
+            OfferReward("ROOM CLEARED  -  " + (opts.Count > 1 ? "CHOOSE AN ELEMENT" : "NEW ELEMENT"),
+                        "Elements add an attribute and a special effect to your " + wd.name + ".", opts, GState.Playing);
+        }
+    }
+
+    // stage boss -> pick a SECONDARY weapon from the class's other weapons
+    void BossCleared()
+    {
+        if (State != GState.Playing || Hero == null) return;
+
+        List<RewardOption> opts = new List<RewardOption>();
+        foreach (int id in Hero.Character.weapons)
+        {
+            if (Hero.HasWeapon(id)) continue;
+            int wid = id;
+            WeaponDef wd = CombatData.Weapons[wid];
+            opts.Add(new RewardOption
+            {
+                title = wd.name,
+                desc = wd.blurb,
+                apply = () => { Hero.AddWeapon(wid); EarnedWeapon = wd.name; }
+            });
+        }
+        OfferReward("STAGE CLEARED  -  CHOOSE A SECONDARY WEAPON",
+                    "Switch weapons with LEFT / RIGHT. It starts with its default action.", opts, GState.Win);
+    }
+
+    static string AttrList(FunctionDef f)
+    {
+        string s = "";
+        foreach (Attr a in f.attrs) s += (s == "" ? "" : " + ") + "<color=#" + CombatData.AttrHex(a) + ">" + a.ToString().ToUpper() + "</color>";
+        return s;
     }
 
     public void PlayerDied()

@@ -1,56 +1,78 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// The player. Handles movement, aiming, weapons/techniques/functions, stamina, and the character ability.
+// The player. Handles movement, AUTO-ATTACKING the nearest enemy, weapon / element switching,
+// and the character ability. The right hand only needs the arrow keys:
+//   Left / Right = switch weapon (primary / secondary),  Up / Down = switch element (none / Ignite / Chill).
 public class HeroController : MonoBehaviour
 {
+    // A weapon the hero owns, with the progress made on it this run.
+    public class OwnedWeapon
+    {
+        public int id;                                    // index into CombatData.Weapons
+        public int action;                                // chosen action (0 = default)
+        public readonly List<int> elements = new List<int>();   // unlocked elements, in the order they were earned
+        public int elementSlot;                           // 0 = no element, 1.. = elements[elementSlot - 1]
+
+        public WeaponDef Def { get { return CombatData.Weapons[id]; } }
+        public int SlotCount { get { return 1 + elements.Count; } }
+        public int ElementAt(int slot) { return slot <= 0 ? -1 : elements[slot - 1]; }
+        public FunctionDef Resolve() { return CombatData.Resolve(id, action, ElementAt(elementSlot)); }
+
+        // label for a slot on the Up / Down strip
+        public string SlotName(int slot)
+        {
+            return slot <= 0 ? Def.actions[action].name : CombatData.ElementNames[elements[slot - 1]];
+        }
+    }
+
     public float maxHp = 100f;
-    public float maxStamina = 100f;
     public float moveSpeed = 5.5f;
 
     public float hp;
-    public float stamina;
-    public int weapon;                 // index into CombatData.WeaponNames
-    public int tech;                   // index into CombatData.TechNames
     public HeroAbility ability;
     public string heroName;
     public Color heroColor;
+    public CharacterDef Character { get; private set; }
 
-    public bool Blocking { get; private set; }
-    public bool Charging { get; private set; }
-    public float ChargeT { get; private set; }          // 0..1
+    public readonly List<OwnedWeapon> Weapons = new List<OwnedWeapon>();
+    public int WeaponSlot { get; private set; }
+    public OwnedWeapon Equipped { get { return Weapons[WeaponSlot]; } }
+
     public int DashCharges { get; private set; }
     public float SurgeLeft { get; private set; }
     public float SurgeCooldown { get; private set; }
     public float SinceDash { get; private set; }
     public Vector2 Face { get; private set; }
+    public FoeController Target { get; private set; }
     public Vector2 Velocity { get { return rb != null ? rb.linearVelocity : Vector2.zero; } }
 
     Rigidbody2D rb;
-    Camera cam;
     SpriteRenderer bodySr;
     Transform aimPivot;
-    GameObject shield;
 
-    float cd0, cd1;
-    float invuln, flash, sinceUse, warnT;
+    float cd;
+    float invuln, flash;
     float dashT, dashRefill;
     Vector2 dashDir;
+    int swingDir = 1;     // swings alternate left->right / right->left
 
-    public void Setup(CharacterDef c)
+    public void Setup(CharacterDef c, int primaryWeaponId)
     {
+        Character = c;
         heroName = c.name;
         heroColor = c.color;
-        weapon = c.weapon;
-        tech = c.tech;
         ability = c.ability;
 
+        Weapons.Clear();
+        AddWeapon(primaryWeaponId);
+        WeaponSlot = 0;
+
         hp = maxHp;
-        stamina = maxStamina;
         DashCharges = 2;
         SinceDash = 99f;
         Face = Vector2.right;
-        cam = Camera.main;
 
         rb = gameObject.AddComponent<Rigidbody2D>();
         rb.gravityScale = 0f;
@@ -65,17 +87,40 @@ public class HeroController : MonoBehaviour
                                     heroTile != null ? new Vector2(1.5f, 1.5f) : new Vector2(0.8f, 0.8f), 10, transform)
                               .GetComponent<SpriteRenderer>();
 
+        // small pointer that shows where the auto-attack is aimed
         aimPivot = new GameObject("Aim").transform;
         aimPivot.SetParent(transform, false);
-
-        GameObject gun = SpriteFactory.Make("Pointer", SpriteFactory.Square, Color.white, new Vector2(0.45f, 0.14f), 11, aimPivot);
-        gun.transform.localPosition = new Vector3(0.5f, 0f, 0f);
-
-        shield = SpriteFactory.Make("Shield", SpriteFactory.Square, new Color(0.6f, 0.85f, 1f), new Vector2(0.14f, 1.0f), 12, aimPivot);
-        shield.transform.localPosition = new Vector3(0.6f, 0f, 0f);
-        shield.SetActive(false);
+        GameObject pointer = SpriteFactory.Make("Pointer", SpriteFactory.Square, Color.white, new Vector2(0.45f, 0.14f), 11, aimPivot);
+        pointer.transform.localPosition = new Vector3(0.5f, 0f, 0f);
     }
 
+    // ---------------- progression (called by RoomDirector rewards) ----------------
+    public bool HasWeapon(int id)
+    {
+        foreach (OwnedWeapon w in Weapons) if (w.id == id) return true;
+        return false;
+    }
+
+    public void AddWeapon(int id)
+    {
+        if (HasWeapon(id)) return;
+        Weapons.Add(new OwnedWeapon { id = id });
+    }
+
+    public void SetAction(int weaponSlot, int action)
+    {
+        Weapons[weaponSlot].action = action;
+    }
+
+    public void AddElement(int weaponSlot, int element)
+    {
+        OwnedWeapon w = Weapons[weaponSlot];
+        if (w.elements.Contains(element)) return;
+        w.elements.Add(element);
+        w.elementSlot = w.elements.Count;      // equip the new element right away so the player sees it
+    }
+
+    // ---------------- main loop ----------------
     void Update()
     {
         if (RoomDirector.State != GState.Playing || rb == null)
@@ -85,20 +130,14 @@ public class HeroController : MonoBehaviour
         }
 
         Keyboard kb = Keyboard.current;
-        Mouse ms = Mouse.current;
-        if (kb == null || ms == null) return;
-        if (cam == null) cam = Camera.main;
+        if (kb == null) return;
 
         float dt = Time.deltaTime;
 
         // ----- timers -----
-        float rate = SurgeLeft > 0f ? 1.7f : 1f;
-        cd0 -= dt * rate;
-        cd1 -= dt * rate;
+        cd -= dt * (SurgeLeft > 0f ? 1.7f : 1f);
         if (invuln > 0f) invuln -= dt;
         if (flash > 0f) flash -= dt;
-        if (warnT > 0f) warnT -= dt;
-        sinceUse += dt;
         SinceDash += dt;
         if (SurgeLeft > 0f) SurgeLeft -= dt;
         if (SurgeCooldown > 0f) SurgeCooldown -= dt;
@@ -109,24 +148,15 @@ public class HeroController : MonoBehaviour
             if (dashRefill <= 0f) { DashCharges++; dashRefill = 2.5f; }
         }
 
-        // ----- aim -----
-        Vector2 mpos = ms.position.ReadValue();
-        Vector3 mw = cam.ScreenToWorldPoint(new Vector3(mpos.x, mpos.y, -cam.transform.position.z));
-        Vector2 toMouse = (Vector2)mw - (Vector2)transform.position;
-        if (toMouse.sqrMagnitude > 0.01f) Face = toMouse.normalized;
-        aimPivot.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(Face.y, Face.x) * Mathf.Rad2Deg);
+        // ----- equipment: left/right = weapon, up/down = element -----
+        int nw = Weapons.Count;
+        if (kb.rightArrowKey.wasPressedThisFrame) WeaponSlot = (WeaponSlot + 1) % nw;
+        if (kb.leftArrowKey.wasPressedThisFrame) WeaponSlot = (WeaponSlot + nw - 1) % nw;
 
-        // ----- equipment strips: left/right = weapon, up/down = technique -----
-        if (kb.rightArrowKey.wasPressedThisFrame) { weapon = (weapon + 1) % CombatData.WeaponNames.Length; CancelCharge(); }
-        if (kb.leftArrowKey.wasPressedThisFrame) { weapon = (weapon + CombatData.WeaponNames.Length - 1) % CombatData.WeaponNames.Length; CancelCharge(); }
-        if (kb.upArrowKey.wasPressedThisFrame) { tech = (tech + 1) % CombatData.TechNames.Length; CancelCharge(); }
-        if (kb.downArrowKey.wasPressedThisFrame) { tech = (tech + CombatData.TechNames.Length - 1) % CombatData.TechNames.Length; CancelCharge(); }
-
-        FunctionDef secondary = CombatData.Resolve(weapon, 1, tech, false);
-
-        // ----- block (hold right mouse with a Block function) -----
-        Blocking = ms.rightButton.isPressed && secondary.kind == FnKind.Block && stamina > 2f && dashT <= 0f;
-        shield.SetActive(Blocking);
+        OwnedWeapon eq = Equipped;
+        int ns = eq.SlotCount;
+        if (kb.upArrowKey.wasPressedThisFrame) eq.elementSlot = (eq.elementSlot + 1) % ns;
+        if (kb.downArrowKey.wasPressedThisFrame) eq.elementSlot = (eq.elementSlot + ns - 1) % ns;
 
         // ----- movement -----
         Vector2 move = new Vector2(
@@ -143,48 +173,47 @@ public class HeroController : MonoBehaviour
         }
         else
         {
-            float sp = moveSpeed * (Blocking ? 0.55f : 1f) * (Charging ? 0.7f : 1f);
-            rb.linearVelocity = move * sp;
+            rb.linearVelocity = move * moveSpeed;
         }
 
-        // ----- primary function (left mouse) -----
-        FunctionDef primary = CombatData.Resolve(weapon, 0, tech, false);
-        if (primary.chargeable)
+        // ----- auto aim: nearest enemy, otherwise the way we're walking -----
+        Target = FindTarget();
+        Vector2 pos = transform.position;
+        if (Target != null)
         {
-            if (ms.leftButton.isPressed)
-            {
-                Charging = true;
-                ChargeT = Mathf.Min(1f, ChargeT + dt / 0.8f);
-            }
-            else if (Charging)
-            {
-                bool full = ChargeT >= 0.5f;
-                TryUse(CombatData.Resolve(weapon, 0, tech, full), 0);
-                CancelCharge();
-            }
+            Vector2 to = (Vector2)Target.transform.position - pos;
+            if (to.sqrMagnitude > 0.0001f) Face = to.normalized;
         }
-        else if (ms.leftButton.isPressed && cd0 <= 0f)
+        else if (move.sqrMagnitude > 0.01f)
         {
-            TryUse(primary, 0);
+            Face = move.normalized;
         }
+        aimPivot.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(Face.y, Face.x) * Mathf.Rad2Deg);
 
-        // ----- secondary function (right mouse, non-block) -----
-        if (secondary.kind != FnKind.Block && ms.rightButton.isPressed && cd1 <= 0f)
-            TryUse(secondary, 1);
-
-        // ----- stamina -----
-        if (Blocking) stamina -= 6f * dt;
-        else if (sinceUse > 0.5f) stamina += (SurgeLeft > 0f ? 60f : 26f) * dt;
-        stamina = Mathf.Clamp(stamina, 0f, maxStamina);
+        // ----- auto attack -----
+        FunctionDef f = eq.Resolve();
+        if (cd <= 0f && Target != null)
+        {
+            float dist = Vector2.Distance(pos, Target.transform.position);
+            if (dist <= f.EngageRange + Target.radius) Attack(f, Target);
+        }
 
         // ----- color feedback -----
         bodySr.color = flash > 0f ? Color.white : (invuln > 0f ? Color.Lerp(heroColor, Color.red, 0.5f) : heroColor);
     }
 
-    void CancelCharge()
+    FoeController FindTarget()
     {
-        Charging = false;
-        ChargeT = 0f;
+        FoeController best = null;
+        float bestD = float.MaxValue;
+        Vector2 pos = transform.position;
+        foreach (FoeController foe in FoeController.All)
+        {
+            if (foe == null || foe.IsDead) continue;
+            float d = ((Vector2)foe.transform.position - pos).sqrMagnitude;
+            if (d < bestD) { bestD = d; best = foe; }
+        }
+        return best;
     }
 
     // ---------------- abilities ----------------
@@ -210,73 +239,99 @@ public class HeroController : MonoBehaviour
         }
     }
 
-    // ---------------- functions ----------------
-    bool TryUse(FunctionDef f, int slot)
+    // ---------------- attacks ----------------
+    void Attack(FunctionDef f, FoeController target)
     {
-        if (stamina < f.stamina)
-        {
-            if (warnT <= 0f)
-            {
-                HudView.Float(transform.position + Vector3.up * 0.9f, "NO STAMINA", new Color(1f, 0.8f, 0.2f));
-                warnT = 0.6f;
-            }
-            return false;
-        }
-
-        // special function from an ability: Dash + Swing = Dash Slash
-        if (ability == HeroAbility.Dash && f.kind == FnKind.Arc && SinceDash < 0.5f)
+        // special from an ability: Dash + a melee hit = Dash Slash
+        if (ability == HeroAbility.Dash && f.IsMelee && SinceDash < 0.5f)
         {
             f = f.Clone();
-            f.name = "Dash Slash";
             f.damage *= 1.5f;
             f.reach *= 1.25f;
-            f.arc = Mathf.Max(f.arc, 150f);
+            if (f.kind == FnKind.Arc) f.arc = Mathf.Max(f.arc, 150f);
             SinceDash = 99f;
+            HudView.Float(transform.position + Vector3.up * 0.9f, "DASH SLASH!", new Color(1f, 0.85f, 0.3f));
         }
 
-        stamina -= f.stamina;
-        sinceUse = 0f;
-        if (slot == 0) cd0 = f.cooldown; else cd1 = f.cooldown;
+        cd = f.cooldown;
+        Color col = AttackColor(f);
 
         switch (f.kind)
         {
-            case FnKind.Arc: DoArc(f); break;
-            case FnKind.Projectile: Shoot(f, Face); break;
+            case FnKind.Arc: DoArc(f, col); break;
+            case FnKind.Thrust: DoThrust(f, col); break;
+            case FnKind.Projectile: Shoot(f, Face, col); break;
             case FnKind.Volley:
-                Shoot(f, Face);
-                Shoot(f, Quaternion.Euler(0f, 0f, 9f) * Face);
-                Shoot(f, Quaternion.Euler(0f, 0f, -9f) * Face);
+                for (int i = 0; i < f.count; i++)
+                {
+                    float a = (i - (f.count - 1) * 0.5f) * f.spread;
+                    Shoot(f, Quaternion.Euler(0f, 0f, a) * Face, col);
+                }
+                break;
+            case FnKind.Boomerang:
+                BoltProjectile.SpawnBoomerang((Vector2)transform.position + Face * 0.6f, Face, f.speed, f.damage, f.attrs,
+                                              f.radius, col, f.range, transform);
+                break;
+            case FnKind.Rain:
+                // aim a little ahead of a moving target
+                Rigidbody2D trb = target.GetComponent<Rigidbody2D>();
+                Vector2 lead = trb != null ? trb.linearVelocity * 0.3f : Vector2.zero;
+                AreaStrike.Spawn((Vector2)target.transform.position + lead, f.aoe, f.duration, f.tick, f.damage, f.attrs, col);
                 break;
         }
-        return true;
     }
 
-    void DoArc(FunctionDef f)
+    static Color AttackColor(FunctionDef f)
+    {
+        return f.attrs.Count > 0 ? CombatData.AttrColor(f.attrs[f.attrs.Count - 1]) : Color.white;
+    }
+
+    static float Angle(Vector2 v) { return Mathf.Atan2(v.y, v.x) * Mathf.Rad2Deg; }
+
+    // fan (or full circle when arc >= 360)
+    void DoArc(FunctionDef f, Color col)
     {
         Vector2 pos = transform.position;
-        Collider2D[] hits = Physics2D.OverlapCircleAll(pos, f.reach + 1.5f);
-        foreach (Collider2D c in hits)
+        foreach (FoeController foe in new List<FoeController>(FoeController.All))
         {
-            FoeController foe = c.GetComponent<FoeController>();
-            if (foe == null) continue;
-
+            if (foe == null || foe.IsDead) continue;
             Vector2 to = (Vector2)foe.transform.position - pos;
             if (to.magnitude > f.reach + foe.radius) continue;
-            if (Vector2.Angle(Face, to) > f.arc * 0.5f) continue;
-
+            if (f.arc < 360f && Vector2.Angle(Face, to) > f.arc * 0.5f) continue;
             foe.Damage(f.damage, f.attrs);
         }
 
-        Color col = f.attrs.Count > 0 ? CombatData.AttrColor(f.attrs[f.attrs.Count - 1]) : Color.white;
-        col.a = 0.55f;
-        FadeSprite.Spawn(pos + Face * f.reach * 0.55f, new Vector2(f.reach * 1.1f, f.reach * 0.5f), col, 0.14f, true);
+        // blade sweep from one side of the fan to the other; consecutive swings alternate direction
+        col.a = f.arc >= 360f ? 0.55f : 0.75f;
+        SwingFx.Spawn(transform, Angle(Face), f.arc, f.reach, col, f.arc >= 360f ? 1 : swingDir);
+        swingDir = -swingDir;
     }
 
-    void Shoot(FunctionDef f, Vector2 dir)
+    // straight line that pierces every enemy in it
+    void DoThrust(FunctionDef f, Color col)
     {
-        Color col = f.attrs.Count > 0 ? CombatData.AttrColor(f.attrs[f.attrs.Count - 1]) : Color.white;
+        Vector2 pos = transform.position;
+        foreach (FoeController foe in new List<FoeController>(FoeController.All))
+        {
+            if (foe == null || foe.IsDead) continue;
+            Vector2 rel = (Vector2)foe.transform.position - pos;
+            float along = Vector2.Dot(rel, Face);
+            float side = Mathf.Abs(Face.x * rel.y - Face.y * rel.x);
+            if (along < -foe.radius || along > f.reach + foe.radius) continue;
+            if (side > f.width + foe.radius) continue;
+            foe.Damage(f.damage, f.attrs);
+        }
+
+        // sharp spike shooting out from the hero toward the target (wide at the base, needle tip at full reach)
+        col.a = 0.85f;
+        FadeSprite.Spawn(pos + Face * f.reach * 0.5f, new Vector2(f.reach, f.width * 2.6f), col, 0.14f,
+                         SpriteFactory.Spike, Angle(Face), true);
+    }
+
+    void Shoot(FunctionDef f, Vector2 dir, Color col)
+    {
         Vector2 origin = (Vector2)transform.position + dir.normalized * 0.6f;
-        BoltProjectile.Spawn(origin, dir, f.speed, f.damage, f.attrs, f.radius, true, col, f.pierce, f.aoe);
+        BoltProjectile.Create(origin, dir, f.speed, f.damage, f.attrs, f.radius, true, col, f.pierce, f.aoe, f.look);
     }
 
     // ---------------- taking damage ----------------
@@ -284,20 +339,8 @@ public class HeroController : MonoBehaviour
     {
         if (invuln > 0f || RoomDirector.State != GState.Playing) return;
 
-        Vector2 from = sourcePos - (Vector2)transform.position;
-        if (Blocking && Vector2.Angle(Face, from) < 75f)
-        {
-            dmg *= 0.15f;
-            stamina = Mathf.Max(0f, stamina - 10f);
-            invuln = 0.2f;
-            flash = 0.08f;
-            HudView.Float(transform.position + Vector3.up * 0.9f, "BLOCKED", new Color(0.6f, 0.85f, 1f));
-        }
-        else
-        {
-            invuln = 0.5f;
-            HudView.Float(transform.position + Vector3.up * 0.9f, "-" + Mathf.RoundToInt(dmg), new Color(1f, 0.35f, 0.35f));
-        }
+        invuln = 0.5f;
+        HudView.Float(transform.position + Vector3.up * 0.9f, "-" + Mathf.RoundToInt(dmg), new Color(1f, 0.35f, 0.35f));
 
         hp -= dmg;
         if (hp <= 0f)
