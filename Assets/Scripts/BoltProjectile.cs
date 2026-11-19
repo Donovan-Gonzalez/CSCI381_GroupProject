@@ -51,8 +51,18 @@ public class BoltProjectile : MonoBehaviour
             case ShotLook.Axe: sp = SpriteFactory.Square; size = new Vector2(radius * 1.4f, radius * 1.4f); break;
         }
 
+        // arrows / knives / thrown axes use the Kenney weapon tiles (they point up-right, so turn them -45 degrees)
+        Sprite tile = null;
+        switch (look)
+        {
+            case ShotLook.Arrow: tile = SpriteFactory.Tile(SpriteFactory.TileArrow); size = Vector2.one * 0.9f; break;
+            case ShotLook.Knife: tile = SpriteFactory.Tile(SpriteFactory.TileDagger); size = Vector2.one * 0.8f; break;
+            case ShotLook.Axe: tile = SpriteFactory.Tile(SpriteFactory.TileAxe); size = Vector2.one * Mathf.Max(0.9f, radius * 3f); break;
+        }
+        if (tile != null) { sp = tile; color = Color.white; }
+
         GameObject vis = SpriteFactory.Make("Visual", sp, color, size, 15, go.transform);
-        vis.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+        vis.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg - (tile != null ? 45f : 0f));
 
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
         rb.bodyType = RigidbodyType2D.Kinematic;

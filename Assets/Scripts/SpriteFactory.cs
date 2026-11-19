@@ -13,6 +13,26 @@ public static class SpriteFactory
     public const int TileMage = 418;
     public const int TileBoss = 317;
     public const int TileWall = 742;   // red brick
+    // weapon icons (Kenney tile numbers as Unity names them in the SpriteBrowser)
+    public const int TileSword = 378;
+    public const int TileAxe = 383;
+    public const int TileDagger = 329;
+    public const int TileBow = 330;
+    public const int TileArrow = 284;   // arrow (used for bow shots)
+
+    // returns the tile for a weapon name ("Sword", "Axe", ...), or -1 if it has no icon
+    public static int WeaponTile(string weaponName)
+    {
+        switch (weaponName)
+        {
+            case "Sword": return TileSword;
+            case "Axe": return TileAxe;
+            case "Dagger": return TileDagger;
+            case "Bow": return TileBow;
+            default: return -1;
+        }
+    }
+
     public static readonly int[] TileFloor = { 1, 2, 3, 4 };   // dirt / rubble speckles
 
     static Sprite[] sheet;

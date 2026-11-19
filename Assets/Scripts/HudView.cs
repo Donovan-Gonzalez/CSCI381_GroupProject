@@ -77,6 +77,20 @@ public class HudView : MonoBehaviour
         GUI.Label(r, text, label);
     }
 
+    // draws a Kenney tile (weapon icon) with a dark plate behind it; does nothing if the tile or sheet is missing
+    void Icon(Rect r, int tile, Color tint)
+    {
+        Sprite sp = SpriteFactory.Tile(tile);
+        if (sp == null) return;
+        Box(r, new Color(0.04f, 0.05f, 0.07f), new Color(0.3f, 0.32f, 0.4f), 1.5f, 6f);
+        Texture2D tex = sp.texture;
+        Rect uv = new Rect(sp.rect.x / tex.width, sp.rect.y / tex.height, sp.rect.width / tex.width, sp.rect.height / tex.height);
+        float pad = r.width * 0.12f;
+        GUI.color = tint;
+        GUI.DrawTextureWithTexCoords(new Rect(r.x + pad, r.y + pad, r.width - 2f * pad, r.height - 2f * pad), tex, uv);
+        GUI.color = Color.white;
+    }
+
     float TextWidth(string text, int size, bool bold)
     {
         label.fontSize = size;
@@ -358,6 +372,7 @@ public class HudView : MonoBehaviour
         FunctionDef f = ow.Resolve();
         Color head = active ? Gold : Dim;
         Txt(new Rect(x, r.y + 8f, w, 18f), role + " · " + ow.Def.name, 13, head, TextAnchor.MiddleLeft, true, false);
+        Icon(new Rect(r.xMax - 46f, r.y + 6f, 34f, 34f), SpriteFactory.WeaponTile(ow.Def.name), active ? Color.white : new Color(0.6f, 0.6f, 0.6f));
         Txt(new Rect(x, r.y + 28f, w, 14f), "action:", 11, Dim, TextAnchor.MiddleLeft, false, false);
         Txt(new Rect(x, r.y + 42f, w + 6f, 24f), f.name, f.name.Length > 16 ? 15 : 17, active ? Color.white : Dim, TextAnchor.MiddleLeft, true, false);
         Txt(new Rect(x, r.y + 68f, w + 6f, 16f), CombatData.StatLine(f), 11, active ? Color.white : Dim, TextAnchor.MiddleLeft, true, false);
@@ -471,6 +486,7 @@ public class HudView : MonoBehaviour
             bool sel = (i == rd.SelectedWeapon);
             Box(r, new Color(0.12f, 0.13f, 0.18f), sel ? Gold : BoxLine, sel ? 3f : 1f, 10f);
             Txt(new Rect(r.x + 14f, r.y + 6f, 372f, 34f), "[" + (i + 1) + "]  " + w.name, 24, c.color, TextAnchor.MiddleLeft, true, false);
+            Icon(new Rect(r.xMax - 54f, r.y + 4f, 40f, 40f), SpriteFactory.WeaponTile(w.name), Color.white);
             Txt(new Rect(r.x + 14f, r.y + 44f, 372f, 60f), w.blurb, 14, Color.white, TextAnchor.UpperLeft, false, true);
             Txt(new Rect(r.x + 14f, r.y + 112f, 372f, 18f), "Starts with:  <b>" + f.name + "</b>", 14, Color.white, TextAnchor.MiddleLeft, false, false);
             Txt(new Rect(r.x + 14f, r.y + 134f, 372f, 18f), CombatData.StatLine(f), 13, Dim, TextAnchor.MiddleLeft, true, false);
@@ -501,6 +517,7 @@ public class HudView : MonoBehaviour
             bool sel = (i == rd.RewardSel);
             Box(r, new Color(0.11f, 0.12f, 0.17f), sel ? Gold : BoxLine, sel ? 3f : 1f, 10f);
             Txt(new Rect(r.x + 14f, r.y + 8f, cw - 28f, 34f), "[" + (i + 1) + "]  " + o.title, 22, sel ? Gold : Color.white, TextAnchor.MiddleLeft, true, false);
+            Icon(new Rect(r.xMax - 54f, r.y + 4f, 40f, 40f), SpriteFactory.WeaponTile(o.title), Color.white);
             Txt(new Rect(r.x + 14f, r.y + 50f, cw - 28f, 130f), o.desc, 14, Color.white, TextAnchor.UpperLeft, false, true);
         }
 
