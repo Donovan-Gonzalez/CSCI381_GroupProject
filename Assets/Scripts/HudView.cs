@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 // All on-screen UI, drawn with Unity's immediate-mode GUI so there is no Canvas to set up:
 //   title / character select, in-game controls screen, HUD (portrait + health/stamina, ability block,
@@ -62,6 +63,9 @@ public class HudView : MonoBehaviour
         GUI.Label(r, text, label);
     }
 
+    // current key(s) for an action, e.g. "P | Escape"
+    static string K(InputAction action) { return action.GetBindingDisplayString(); }
+
     Vector2 ToGui(Vector3 world)
     {
         Vector3 sp = cam.WorldToScreenPoint(world);
@@ -87,6 +91,7 @@ public class HudView : MonoBehaviour
         GUI.matrix = Matrix4x4.Scale(new Vector3(s, s, 1f));
 
         GState st = RoomDirector.State;
+        if (st == GState.Keybinds) { DrawKeybinds(rd); return; }
         if (st == GState.Title) { DrawTitle(rd); return; }
 
         DrawWorldLabels(rd);
@@ -189,14 +194,14 @@ public class HudView : MonoBehaviour
         Fill(new Rect(132f, 652f, 280f, 56f), new Color(0.12f, 0.13f, 0.18f));
         if (h.ability == HeroAbility.Dash)
         {
-            Txt(new Rect(140f, 654f, 264f, 16f), "ABILITY  [Space]  Dash", 13, Color.white, TextAnchor.MiddleLeft, true, false);
+            Txt(new Rect(140f, 654f, 264f, 16f), "ABILITY  [" + K(KeyBinds.Ability) + "]  Dash", 13, Color.white, TextAnchor.MiddleLeft, true, false);
             for (int i = 0; i < 2; i++)
                 Fill(new Rect(140f + i * 26f, 676f, 20f, 20f), i < h.DashCharges ? h.heroColor : new Color(0.25f, 0.27f, 0.33f));
             Txt(new Rect(198f, 672f, 208f, 32f), "Dash, then Swing = Dash Slash", 11, Dim, TextAnchor.MiddleLeft, false, true);
         }
         else
         {
-            Txt(new Rect(140f, 654f, 264f, 16f), "ABILITY  [Space]  Surge", 13, Color.white, TextAnchor.MiddleLeft, true, false);
+            Txt(new Rect(140f, 654f, 264f, 16f), "ABILITY  [" + K(KeyBinds.Ability) + "]  Surge", 13, Color.white, TextAnchor.MiddleLeft, true, false);
             string status;
             Color sc;
             if (h.SurgeLeft > 0f) { status = "ACTIVE  " + h.SurgeLeft.ToString("0.0") + "s"; sc = Gold; }
@@ -207,7 +212,7 @@ public class HudView : MonoBehaviour
 
         // equipment block: weapon strip, technique strip, current functions
         float ex = 432f;
-        Txt(new Rect(ex, 598f, 400f, 16f), "WEAPON   (Left / Right arrows)", 12, Dim, TextAnchor.MiddleLeft, true, false);
+        Txt(new Rect(ex, 598f, 400f, 16f), "WEAPON   (" + K(KeyBinds.PrevWeapon) + " / " + K(KeyBinds.NextWeapon) + ")", 12, Dim, TextAnchor.MiddleLeft, true, false);
         for (int i = 0; i < CombatData.WeaponNames.Length; i++)
         {
             bool cur = (i == h.weapon);
@@ -216,7 +221,7 @@ public class HudView : MonoBehaviour
             Txt(r, CombatData.WeaponNames[i], 14, cur ? Color.black : Dim, TextAnchor.MiddleCenter, cur, false);
         }
 
-        Txt(new Rect(ex, 646f, 400f, 16f), "TECHNIQUE   (Up / Down arrows)", 12, Dim, TextAnchor.MiddleLeft, true, false);
+        Txt(new Rect(ex, 646f, 400f, 16f), "SKILL   (" + K(KeyBinds.PrevSkill) + " / " + K(KeyBinds.NextSkill) + ")", 12, Dim, TextAnchor.MiddleLeft, true, false);
         for (int i = 0; i < CombatData.TechNames.Length; i++)
         {
             bool cur = (i == h.tech);
@@ -227,7 +232,7 @@ public class HudView : MonoBehaviour
 
         FunctionDef prim = CombatData.Resolve(h.weapon, 0, h.tech, true);
         FunctionDef sec = CombatData.Resolve(h.weapon, 1, h.tech, false);
-        string line = FnText(prim, "LMB") + "      " + FnText(sec, "RMB");
+        string line = FnText(prim, K(KeyBinds.Primary)) + "      " + FnText(sec, K(KeyBinds.Secondary));
         if (h.ability == HeroAbility.Dash && h.SinceDash < 0.5f && prim.kind == FnKind.Arc)
             line += "   <color=#ffd84a>DASH SLASH READY!</color>";
         Txt(new Rect(ex, 694f, vw - ex - 16f, 22f), line, 14, Color.white, TextAnchor.MiddleLeft, false, false);
@@ -250,7 +255,7 @@ public class HudView : MonoBehaviour
         }
 
         Txt(new Rect(vw - 276f, 4f, 260f, 20f), "Enemies left: " + rd.Remaining, 16, Color.white, TextAnchor.MiddleRight, true, false);
-        Txt(new Rect(vw - 276f, 22f, 260f, 16f), "P = pause + controls", 11, Dim, TextAnchor.MiddleRight, false, false);
+        Txt(new Rect(vw - 276f, 22f, 260f, 16f), "Pause: " + K(KeyBinds.Pause), 11, Dim, TextAnchor.MiddleRight, false, false);
 
         if (rd.DoorOpen && RoomDirector.State == GState.Playing)
             Txt(new Rect(0f, 44f, vw, 24f), "DOOR UNLOCKED  -  head RIGHT to the next room", 16, new Color(0.5f, 1f, 0.6f), TextAnchor.MiddleCenter, true, false);
@@ -270,16 +275,17 @@ public class HudView : MonoBehaviour
         Fill(area, new Color(0.1f, 0.11f, 0.15f, 0.95f));
         Txt(new Rect(area.x + 16f, area.y + 8f, 300f, 24f), "CONTROLS", 18, Gold, TextAnchor.MiddleLeft, true, false);
 
+        // key names come from KeyBinds, so this list stays right after a rebind
         string[,] rows =
         {
-            { "W A S D", "Move" },
+            { K(KeyBinds.Move), "Move" },
             { "Mouse", "Aim" },
-            { "Left click", "Primary function (hold, then release, when the Charge technique is equipped)" },
-            { "Right click", "Secondary function (hold to Block with the Sword & Shield)" },
-            { "Left / Right arrows", "Change weapon  (weapon strip)" },
-            { "Up / Down arrows", "Change technique  (technique strip)" },
-            { "Space", "Character ability  (Vanguard: Dash, Ember: Surge)" },
-            { "P or Esc", "Pause" }
+            { K(KeyBinds.Primary), "Primary function (hold, then release, when the Charge skill is equipped)" },
+            { K(KeyBinds.Secondary), "Secondary function (hold to Block with the Sword & Shield)" },
+            { K(KeyBinds.PrevWeapon) + " / " + K(KeyBinds.NextWeapon), "Change weapon  (weapon strip)" },
+            { K(KeyBinds.PrevSkill) + " / " + K(KeyBinds.NextSkill), "Change skill  (skill strip)" },
+            { K(KeyBinds.Ability), "Character ability  (Vanguard: Dash, Ember: Surge)" },
+            { K(KeyBinds.Pause), "Pause" }
         };
 
         for (int i = 0; i < rows.GetLength(0); i++)
@@ -309,7 +315,8 @@ public class HudView : MonoBehaviour
 
         DrawControls(new Rect(vw / 2f - 410f, 280f, 820f, 260f));
 
-        Txt(new Rect(0f, 560f, vw, 36f), "Press ENTER to start    (1 / 2 or Left / Right to pick a hero)", 22, Color.white, TextAnchor.MiddleCenter, true, false);
+        Txt(new Rect(0f, 560f, vw, 36f), "Press " + K(KeyBinds.Confirm) + " to start    (" + K(KeyBinds.PickChar1) + " / " + K(KeyBinds.PickChar2) + " or " + K(KeyBinds.CycleChar) + " to pick a hero)", 22, Color.white, TextAnchor.MiddleCenter, true, false);
+        Txt(new Rect(0f, 586f, vw, 18f), "K = keybinds", 14, Gold, TextAnchor.MiddleCenter, true, false);
         Txt(new Rect(0f, 604f, vw, 24f), "Rooms stay locked until every enemy is dead. Every enemy has a strength and a weakness - read the labels!", 14, Dim, TextAnchor.MiddleCenter, false, false);
         Txt(new Rect(0f, 630f, vw, 24f), "Attributes:  <color=#d9f2ff>SLASH</color>   <color=#80e08c>PUNCTURE</color>   <color=#ff9a3d>FIRE</color>   <color=#8fd4ff>FROZEN</color> (slows)", 14, Color.white, TextAnchor.MiddleCenter, false, false);
     }
@@ -319,7 +326,34 @@ public class HudView : MonoBehaviour
         Fill(new Rect(0f, 0f, vw, 720f), new Color(0f, 0f, 0f, 0.75f));
         Txt(new Rect(0f, 70f, vw, 60f), "PAUSED", 44, Color.white, TextAnchor.MiddleCenter, true, false);
         DrawControls(new Rect(vw / 2f - 410f, 160f, 820f, 260f));
-        Txt(new Rect(0f, 440f, vw, 30f), "Press P or Esc to resume", 20, Gold, TextAnchor.MiddleCenter, true, false);
+        Txt(new Rect(0f, 440f, vw, 30f), "Press " + K(KeyBinds.Pause) + " to resume     |     K = keybinds", 20, Gold, TextAnchor.MiddleCenter, true, false);
+    }
+
+    void DrawKeybinds(RoomDirector rd)
+    {
+        Fill(new Rect(0f, 0f, vw, 720f), new Color(0.05f, 0.05f, 0.08f, 1f));
+        Txt(new Rect(0f, 14f, vw, 44f), "KEYBINDS", 34, Color.white, TextAnchor.MiddleCenter, true, false);
+        Txt(new Rect(0f, 56f, vw, 22f), "Up / Down: choose     Enter: rebind     Backspace: reset all     Esc: back", 15, Dim, TextAnchor.MiddleCenter, false, false);
+
+        // two columns so ~22 rows fit on a 720 px screen
+        int perCol = 12;
+        float colW = 400f;
+        float x0 = vw / 2f - colW - 10f;
+        for (int i = 0; i < KeyBinds.Rows.Count; i++)
+        {
+            KeyBinds.Row row = KeyBinds.Rows[i];
+            float x = x0 + (i / perCol) * (colW + 20f);
+            float y = 96f + (i % perCol) * 44f;
+            Rect r = new Rect(x, y, colW, 38f);
+
+            bool sel = (i == rd.KeybindSel);
+            Fill(r, sel ? new Color(0.22f, 0.24f, 0.32f) : new Color(0.12f, 0.13f, 0.18f));
+            if (sel) Fill(new Rect(r.x, r.y, 4f, r.height), Gold);
+
+            string key = (sel && KeyBinds.IsRebinding) ? "Press a key...  (Esc cancels)" : KeyBinds.KeyText(row);
+            Txt(new Rect(r.x + 14f, r.y, 180f, r.height), row.label, 15, Color.white, TextAnchor.MiddleLeft, true, false);
+            Txt(new Rect(r.x + 190f, r.y, colW - 200f, r.height), key, 15, sel ? Gold : Dim, TextAnchor.MiddleRight, sel, false);
+        }
     }
 
     void DrawEnd(RoomDirector rd, bool won)
@@ -335,6 +369,6 @@ public class HudView : MonoBehaviour
             Txt(new Rect(0f, 200f, vw, 70f), "GAME OVER", 58, new Color(1f, 0.35f, 0.35f), TextAnchor.MiddleCenter, true, false);
             Txt(new Rect(0f, 280f, vw, 30f), "You fell in  " + rd.Rooms[rd.RoomIndex].name, 20, Color.white, TextAnchor.MiddleCenter, false, false);
         }
-        Txt(new Rect(0f, 360f, vw, 30f), "Press R to retry     |     T for the title screen", 20, Color.white, TextAnchor.MiddleCenter, true, false);
+        Txt(new Rect(0f, 360f, vw, 30f), "Press " + K(KeyBinds.Retry) + " to retry     |     " + K(KeyBinds.ToTitle) + " for the title screen", 20, Color.white, TextAnchor.MiddleCenter, true, false);
     }
 }

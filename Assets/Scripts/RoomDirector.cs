@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-public enum GState { Title, Playing, Paused, Win, Lose }
+public enum GState { Title, Playing, Paused, Win, Lose, Keybinds }
 
 // Owns the game flow: title -> rooms (doors locked until enemies are cleared) -> boss -> win / game over.
 // Also builds the room geometry (floor, walls, door) from code.
@@ -56,6 +56,9 @@ public class RoomDirector : MonoBehaviour
     public bool DoorOpen { get; private set; }
     public HeroController Hero { get; private set; }
     public int SelectedChar { get; private set; }
+    public int KeybindSel { get; private set; }      // highlighted row in the keybinds menu
+    GState keybindsReturn;                           // screen to go back to when the menu closes
+    bool enterArmed;                                 // Enter was pressed in the menu (not while rebinding)
 
     GameObject doorObj;
     BoxCollider2D doorCol;
@@ -170,6 +173,7 @@ public class RoomDirector : MonoBehaviour
                 if (KeyBinds.CycleChar.WasPressedThisFrame())
                     SelectedChar = (SelectedChar + 1) % CombatData.Roster.Length;
                 if (KeyBinds.Confirm.WasPressedThisFrame()) StartGame();
+                if (kb.kKey.wasPressedThisFrame) OpenKeybinds();
                 break;
 
             case GState.Playing:
@@ -180,6 +184,11 @@ public class RoomDirector : MonoBehaviour
 
             case GState.Paused:
                 if (KeyBinds.Pause.WasPressedThisFrame()) SetState(GState.Playing);
+                if (kb.kKey.wasPressedThisFrame) OpenKeybinds();
+                break;
+
+            case GState.Keybinds:
+                UpdateKeybindsMenu(kb);
                 break;
 
             case GState.Win:
@@ -188,6 +197,38 @@ public class RoomDirector : MonoBehaviour
                 if (KeyBinds.ToTitle.WasPressedThisFrame()) { ClearWorld(); SetState(GState.Title); }
                 break;
         }
+    }
+
+    // ---------------------------------------------------------------- keybinds menu
+    // The menu's own keys (arrows, Enter, Esc, Backspace) read the keyboard directly on purpose:
+    // they are NOT rebindable, so a player can never lock themselves out of the menu.
+    void OpenKeybinds()
+    {
+        keybindsReturn = State;
+        KeybindSel = 0;
+        enterArmed = false;
+        SetState(GState.Keybinds);
+    }
+
+    void UpdateKeybindsMenu(Keyboard kb)
+    {
+        if (KeyBinds.IsRebinding) return;                              // waiting for the player's new key
+        if (Time.frameCount == KeyBinds.LastRebindFrame) return;       // that key shouldn't also drive the menu
+
+        int count = KeyBinds.Rows.Count;
+        if (kb.downArrowKey.wasPressedThisFrame) KeybindSel = (KeybindSel + 1) % count;
+        if (kb.upArrowKey.wasPressedThisFrame) KeybindSel = (KeybindSel + count - 1) % count;
+
+        // start on RELEASE, so the Enter key itself isn't picked up as the new binding.
+        // enterArmed makes sure it was pressed here, not as the new key at the end of a rebind.
+        if (kb.enterKey.wasPressedThisFrame) enterArmed = true;
+        if (kb.enterKey.wasReleasedThisFrame && enterArmed)
+        {
+            enterArmed = false;
+            KeyBinds.StartRebind(KeyBinds.Rows[KeybindSel]);
+        }
+        if (kb.backspaceKey.wasPressedThisFrame) KeyBinds.ResetAll();
+        if (kb.escapeKey.wasPressedThisFrame) SetState(keybindsReturn);
     }
 
     void ClearWorld()
