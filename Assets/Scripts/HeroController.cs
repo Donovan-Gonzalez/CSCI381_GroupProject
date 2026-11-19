@@ -51,6 +51,14 @@ public class HeroController : MonoBehaviour
     Rigidbody2D rb;
     SpriteRenderer bodySr;
     Transform aimPivot;
+    GameObject held, heldPointer;
+    Transform heldPivot;
+    bool heldHasSprite;
+    float heldBaseRot = -45f;
+    // held-weapon animation: 1 = sweep (swing), 2 = thrust, 3 = recoil (shots)
+    int animKind; float animT, animDur, animArc, animDir, animReach, heldHideT;
+    SpriteRenderer heldSr;
+    string heldName;
 
     float cd;
     float invuln, flash;
@@ -92,6 +100,78 @@ public class HeroController : MonoBehaviour
         aimPivot.SetParent(transform, false);
         GameObject pointer = SpriteFactory.Make("Pointer", SpriteFactory.Square, Color.white, new Vector2(0.45f, 0.14f), 11, aimPivot);
         pointer.transform.localPosition = new Vector3(0.5f, 0f, 0f);
+        heldPointer = pointer;
+
+        // the weapon the hero is actually holding (Kenney tile); the white pointer is only the fallback
+        heldPivot = new GameObject("HeldPivot").transform;      // rotates around the hero during a swing
+        heldPivot.SetParent(aimPivot, false);
+        held = SpriteFactory.Make("Held", SpriteFactory.Square, Color.white, Vector2.one, 12, heldPivot);
+        held.transform.localPosition = new Vector3(0.75f, 0f, 0f);
+        held.transform.localRotation = Quaternion.Euler(0f, 0f, -45f);   // Kenney weapons point up-right; turn the tip to face forward
+        heldSr = held.GetComponent<SpriteRenderer>();
+        heldName = null;
+        UpdateHeldWeapon();
+    }
+
+    // shows the sprite of the currently equipped weapon (called every frame; only swaps when the weapon changed)
+    void UpdateHeldWeapon()
+    {
+        if (held == null) return;
+        string wn = Equipped.Def.name;
+        if (wn == heldName) return;
+        heldName = wn;
+
+        Sprite sp = SpriteFactory.Tile(SpriteFactory.WeaponTile(wn));
+        heldHasSprite = sp != null;
+        held.SetActive(heldHasSprite);
+        heldPointer.SetActive(!heldHasSprite);
+        if (sp == null) return;
+        heldSr.sprite = sp;
+        heldSr.color = Color.white;
+        heldBaseRot = (wn == "Bow") ? 45f : -45f;     // the bow's belly faces forward; blades point their tip forward
+        held.transform.localRotation = Quaternion.Euler(0f, 0f, heldBaseRot);
+        held.transform.localScale = Vector3.one * 1.3f;
+    }
+
+    void StartWeaponAnim(int kind, float dur, float arc, float dir, float reach)
+    {
+        animKind = kind; animT = 0f; animDur = dur; animArc = arc; animDir = dir; animReach = reach;
+    }
+
+    // plays the swing / thrust / recoil on the weapon in the hero's hand
+    void AnimateHeld()
+    {
+        if (held == null || !heldHasSprite) return;
+        float dt = Time.deltaTime;
+
+        if (heldHideT > 0f) heldHideT -= dt;
+        held.SetActive(heldHideT <= 0f);
+
+        float x = 0.75f, scale = 1.3f, sweep = 0f;
+        if (animKind != 0)
+        {
+            animT += dt;
+            float p = Mathf.Clamp01(animT / animDur);
+            if (animKind == 1)          // swing: sweep around the hero from one side of the fan to the other
+            {
+                float e = 1f - (1f - p) * (1f - p);
+                sweep = animDir * animArc * (e - 0.5f);
+                x = 0.95f; scale = 1.6f;
+            }
+            else if (animKind == 2)     // thrust: stab straight out and back
+            {
+                x = 0.75f + animReach * 0.55f * Mathf.Sin(p * Mathf.PI);
+                scale = 1.5f;
+            }
+            else                        // recoil when shooting / throwing
+            {
+                x = 0.75f - 0.28f * Mathf.Sin(p * Mathf.PI);
+            }
+            if (p >= 1f) animKind = 0;
+        }
+        heldPivot.localRotation = Quaternion.Euler(0f, 0f, sweep);
+        held.transform.localPosition = new Vector3(x, 0f, 0f);
+        held.transform.localScale = Vector3.one * scale;
     }
 
     // ---------------- progression (called by RoomDirector rewards) ----------------
@@ -189,6 +269,8 @@ public class HeroController : MonoBehaviour
             Face = move.normalized;
         }
         aimPivot.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(Face.y, Face.x) * Mathf.Rad2Deg);
+        UpdateHeldWeapon();
+        AnimateHeld();
 
         // ----- auto attack -----
         FunctionDef f = eq.Resolve();
@@ -260,17 +342,20 @@ public class HeroController : MonoBehaviour
         {
             case FnKind.Arc: DoArc(f, col); break;
             case FnKind.Thrust: DoThrust(f, col); break;
-            case FnKind.Projectile: Shoot(f, Face, col); break;
+            case FnKind.Projectile: Shoot(f, Face, col); StartWeaponAnim(3, 0.16f, 0f, 0f, 0f); break;
             case FnKind.Volley:
                 for (int i = 0; i < f.count; i++)
                 {
                     float a = (i - (f.count - 1) * 0.5f) * f.spread;
                     Shoot(f, Quaternion.Euler(0f, 0f, a) * Face, col);
                 }
+                StartWeaponAnim(3, 0.16f, 0f, 0f, 0f);
                 break;
             case FnKind.Boomerang:
                 BoltProjectile.SpawnBoomerang((Vector2)transform.position + Face * 0.6f, Face, f.speed, f.damage, f.attrs,
                                               f.radius, col, f.range, transform);
+                StartWeaponAnim(3, 0.16f, 0f, 0f, 0f);
+                heldHideT = f.cooldown * 0.85f;     // the axe is out of your hand until it comes back
                 break;
             case FnKind.Rain:
                 // aim a little ahead of a moving target
@@ -303,7 +388,9 @@ public class HeroController : MonoBehaviour
 
         // blade sweep from one side of the fan to the other; consecutive swings alternate direction
         col.a = f.arc >= 360f ? 0.55f : 0.75f;
-        SwingFx.Spawn(transform, Angle(Face), f.arc, f.reach, col, f.arc >= 360f ? 1 : swingDir);
+        int sd = f.arc >= 360f ? 1 : swingDir;
+        SwingFx.Spawn(transform, Angle(Face), f.arc, f.reach, col, sd);
+        StartWeaponAnim(1, f.arc >= 360f ? 0.22f : 0.16f, f.arc, sd, f.reach);
         swingDir = -swingDir;
     }
 
@@ -323,6 +410,7 @@ public class HeroController : MonoBehaviour
         }
 
         // sharp spike shooting out from the hero toward the target (wide at the base, needle tip at full reach)
+        StartWeaponAnim(2, 0.22f, 0f, 0f, f.reach);
         col.a = 0.85f;
         FadeSprite.Spawn(pos + Face * f.reach * 0.5f, new Vector2(f.reach, f.width * 2.6f), col, 0.14f,
                          SpriteFactory.Spike, Angle(Face), true);
