@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// A projectile. Friendly ones (arrows, bolts) hurt foes; hostile ones (arrows, magic orbs) hurt the hero.
+// A projectile. Friendly ones (arrows, knives, sword waves, thrown axes) hurt foes;
+// hostile ones (arrows, magic orbs) hurt the hero.
+// The collider lives on the root object; the picture is a child so it can be stretched / rotated / spun.
 public class BoltProjectile : MonoBehaviour
 {
     bool friendly;
@@ -12,11 +14,45 @@ public class BoltProjectile : MonoBehaviour
     float life = 3.5f;
     readonly HashSet<FoeController> alreadyHit = new HashSet<FoeController>();
 
+    Rigidbody2D rb;
+    Transform visual;
+    bool spin;
+
+    // boomerang (Axe Throw): flies out `outDist`, then homes back to `owner`
+    bool boomerang;
+    bool returning;
+    float outDist;
+    float travelled;
+    float speed;
+    Transform owner;
+
+    // Old signature, still used by enemies: a round orb.
     public static void Spawn(Vector2 pos, Vector2 dir, float speed, float damage, List<Attr> attrs, float radius,
                              bool friendly, Color color, int pierce, float aoe)
     {
-        GameObject go = SpriteFactory.Make("Bolt", SpriteFactory.Circle, color, new Vector2(radius * 2f, radius * 2f), 15, null);
+        Create(pos, dir, speed, damage, attrs, radius, friendly, color, pierce, aoe, ShotLook.Orb);
+    }
+
+    public static BoltProjectile Create(Vector2 pos, Vector2 dir, float speed, float damage, List<Attr> attrs, float radius,
+                                        bool friendly, Color color, int pierce, float aoe, ShotLook look)
+    {
+        dir = dir.sqrMagnitude > 0.0001f ? dir.normalized : Vector2.right;
+
+        GameObject go = new GameObject(friendly ? "HeroShot" : "Bolt");
         go.transform.position = pos;
+
+        Sprite sp = SpriteFactory.Circle;
+        Vector2 size = new Vector2(radius * 2f, radius * 2f);
+        switch (look)
+        {
+            case ShotLook.Arrow: sp = SpriteFactory.Square; size = new Vector2(0.6f, 0.09f); break;
+            case ShotLook.Knife: sp = SpriteFactory.Square; size = new Vector2(0.42f, 0.13f); break;
+            case ShotLook.Crescent: sp = SpriteFactory.Crescent; size = new Vector2(radius * 1.4f, radius * 3.4f); break;
+            case ShotLook.Axe: sp = SpriteFactory.Square; size = new Vector2(radius * 1.4f, radius * 1.4f); break;
+        }
+
+        GameObject vis = SpriteFactory.Make("Visual", sp, color, size, 15, go.transform);
+        vis.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
 
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
         rb.bodyType = RigidbodyType2D.Kinematic;
@@ -24,7 +60,7 @@ public class BoltProjectile : MonoBehaviour
 
         CircleCollider2D col = go.AddComponent<CircleCollider2D>();
         col.isTrigger = true;
-        col.radius = 0.5f;   // local space: scaled by the sprite size above
+        col.radius = radius;
 
         BoltProjectile b = go.AddComponent<BoltProjectile>();
         b.friendly = friendly;
@@ -32,15 +68,56 @@ public class BoltProjectile : MonoBehaviour
         if (attrs != null) b.attrs = new List<Attr>(attrs);
         b.pierce = pierce;
         b.aoe = aoe;
+        b.rb = rb;
+        b.visual = vis.transform;
+        b.speed = speed;
+        b.spin = (look == ShotLook.Axe);
 
-        rb.linearVelocity = dir.normalized * speed;
+        rb.linearVelocity = dir * speed;
+        return b;
+    }
+
+    public static void SpawnBoomerang(Vector2 pos, Vector2 dir, float speed, float damage, List<Attr> attrs, float radius,
+                                      Color color, float range, Transform owner)
+    {
+        BoltProjectile b = Create(pos, dir, speed, damage, attrs, radius, true, color, 999, 0f, ShotLook.Axe);
+        b.boomerang = true;
+        b.outDist = range;
+        b.owner = owner;
+        b.life = 6f;
     }
 
     void Update()
     {
         if (RoomDirector.State != GState.Playing) return;
-        life -= Time.deltaTime;
+        float dt = Time.deltaTime;
+
+        if (spin && visual != null) visual.Rotate(0f, 0f, -900f * dt);
+
+        if (boomerang)
+        {
+            if (!returning)
+            {
+                travelled += speed * dt;
+                if (travelled >= outDist) StartReturn();
+            }
+            else
+            {
+                if (owner == null) { Destroy(gameObject); return; }
+                Vector2 to = (Vector2)owner.position - (Vector2)transform.position;
+                if (to.magnitude < 0.6f) { Destroy(gameObject); return; }
+                rb.linearVelocity = to.normalized * speed * 1.25f;
+            }
+        }
+
+        life -= dt;
         if (life <= 0f) Destroy(gameObject);
+    }
+
+    void StartReturn()
+    {
+        returning = true;
+        alreadyHit.Clear();          // the axe can hit the same enemy again on the way back
     }
 
     void OnTriggerEnter2D(Collider2D other)
@@ -69,7 +146,8 @@ public class BoltProjectile : MonoBehaviour
             }
             else if (other.GetComponent<HeroController>() == null)
             {
-                Destroy(gameObject);      // hit a wall
+                if (boomerang) { if (!returning) StartReturn(); }   // bounce off the wall and come back
+                else Destroy(gameObject);                          // hit a wall
             }
         }
         else
