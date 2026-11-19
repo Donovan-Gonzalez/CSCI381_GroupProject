@@ -165,27 +165,27 @@ public class RoomDirector : MonoBehaviour
         switch (State)
         {
             case GState.Title:
-                if (kb.digit1Key.wasPressedThisFrame) SelectedChar = 0;
-                if (kb.digit2Key.wasPressedThisFrame) SelectedChar = 1;
-                if (kb.leftArrowKey.wasPressedThisFrame || kb.rightArrowKey.wasPressedThisFrame)
+                if (KeyBinds.PickChar1.WasPressedThisFrame()) SelectedChar = 0;
+                if (KeyBinds.PickChar2.WasPressedThisFrame()) SelectedChar = 1;
+                if (KeyBinds.CycleChar.WasPressedThisFrame())
                     SelectedChar = (SelectedChar + 1) % CombatData.Roster.Length;
-                if (kb.enterKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame) StartGame();
+                if (KeyBinds.Confirm.WasPressedThisFrame()) StartGame();
                 break;
 
             case GState.Playing:
-                if (kb.pKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame) SetState(GState.Paused);
+                if (KeyBinds.Pause.WasPressedThisFrame()) SetState(GState.Paused);
                 RoomTime += Time.deltaTime;
                 if (DoorOpen && Hero != null && Hero.transform.position.x > Center.x + RoomW / 2f + 0.3f) NextRoom();
                 break;
 
             case GState.Paused:
-                if (kb.pKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame) SetState(GState.Playing);
+                if (KeyBinds.Pause.WasPressedThisFrame()) SetState(GState.Playing);
                 break;
 
             case GState.Win:
             case GState.Lose:
-                if (kb.rKey.wasPressedThisFrame) StartGame();                 // retry with the same hero
-                if (kb.tKey.wasPressedThisFrame) { ClearWorld(); SetState(GState.Title); }
+                if (KeyBinds.Retry.WasPressedThisFrame()) StartGame();                 // retry with the same hero
+                if (KeyBinds.ToTitle.WasPressedThisFrame()) { ClearWorld(); SetState(GState.Title); }
                 break;
         }
     }

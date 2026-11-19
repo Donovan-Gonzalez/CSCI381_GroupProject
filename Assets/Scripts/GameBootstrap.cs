@@ -5,6 +5,7 @@ public class GameBootstrap : MonoBehaviour
 {
     void Awake()
     {
+        KeyBinds.Init();
         Camera cam = Camera.main;
         if (cam == null)
         {

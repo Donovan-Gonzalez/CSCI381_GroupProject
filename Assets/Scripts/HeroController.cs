@@ -84,9 +84,6 @@ public class HeroController : MonoBehaviour
             return;
         }
 
-        Keyboard kb = Keyboard.current;
-        Mouse ms = Mouse.current;
-        if (kb == null || ms == null) return;
         if (cam == null) cam = Camera.main;
 
         float dt = Time.deltaTime;
@@ -110,31 +107,37 @@ public class HeroController : MonoBehaviour
         }
 
         // ----- aim -----
-        Vector2 mpos = ms.position.ReadValue();
+        Vector2 mpos = KeyBinds.Aim.ReadValue<Vector2>();
         Vector3 mw = cam.ScreenToWorldPoint(new Vector3(mpos.x, mpos.y, -cam.transform.position.z));
         Vector2 toMouse = (Vector2)mw - (Vector2)transform.position;
         if (toMouse.sqrMagnitude > 0.01f) Face = toMouse.normalized;
         aimPivot.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(Face.y, Face.x) * Mathf.Rad2Deg);
 
-        // ----- equipment strips: left/right = weapon, up/down = technique -----
-        if (kb.rightArrowKey.wasPressedThisFrame) { weapon = (weapon + 1) % CombatData.WeaponNames.Length; CancelCharge(); }
-        if (kb.leftArrowKey.wasPressedThisFrame) { weapon = (weapon + CombatData.WeaponNames.Length - 1) % CombatData.WeaponNames.Length; CancelCharge(); }
-        if (kb.upArrowKey.wasPressedThisFrame) { tech = (tech + 1) % CombatData.TechNames.Length; CancelCharge(); }
-        if (kb.downArrowKey.wasPressedThisFrame) { tech = (tech + CombatData.TechNames.Length - 1) % CombatData.TechNames.Length; CancelCharge(); }
+        // ----- equipment strips: left/right = weapon, up/down = skill -----
+        if (KeyBinds.NextWeapon.WasPressedThisFrame()) {
+            weapon = (weapon + 1) % CombatData.WeaponNames.Length; CancelCharge(); 
+        }       
+        if (KeyBinds.PrevWeapon.WasPressedThisFrame()) {
+            weapon = (weapon + CombatData.WeaponNames.Length - 1) % CombatData.WeaponNames.Length; CancelCharge();
+        }
+        if (KeyBinds.NextSkill.WasPressedThisFrame()) {
+            tech = (tech + 1) % CombatData.TechNames.Length; CancelCharge(); 
+        }
+        if (KeyBinds.PrevSkill.WasPressedThisFrame()) {    
+            tech = (tech + CombatData.TechNames.Length - 1) % CombatData.TechNames.Length; CancelCharge();
+        } 
 
         FunctionDef secondary = CombatData.Resolve(weapon, 1, tech, false);
 
         // ----- block (hold right mouse with a Block function) -----
-        Blocking = ms.rightButton.isPressed && secondary.kind == FnKind.Block && stamina > 2f && dashT <= 0f;
+        Blocking = KeyBinds.Secondary.IsPressed() && secondary.kind == FnKind.Block && stamina > 2f && dashT <= 0f;
         shield.SetActive(Blocking);
 
         // ----- movement -----
-        Vector2 move = new Vector2(
-            (kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f),
-            (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
-        if (move.sqrMagnitude > 1f) move.Normalize();
+        Vector2 move = KeyBinds.Move.ReadValue<Vector2>();
+        if (move.sqrMagnitude > 1f) move.Normalize(); //Check if this is necessary
 
-        if (kb.spaceKey.wasPressedThisFrame) UseAbility(move);
+        if (KeyBinds.Ability.WasPressedThisFrame()) UseAbility(move);
 
         if (dashT > 0f)
         {
@@ -151,7 +154,7 @@ public class HeroController : MonoBehaviour
         FunctionDef primary = CombatData.Resolve(weapon, 0, tech, false);
         if (primary.chargeable)
         {
-            if (ms.leftButton.isPressed)
+            if (KeyBinds.Primary.IsPressed())
             {
                 Charging = true;
                 ChargeT = Mathf.Min(1f, ChargeT + dt / 0.8f);
@@ -163,13 +166,13 @@ public class HeroController : MonoBehaviour
                 CancelCharge();
             }
         }
-        else if (ms.leftButton.isPressed && cd0 <= 0f)
+        else if (KeyBinds.Primary.IsPressed() && cd0 <= 0f)
         {
             TryUse(primary, 0);
         }
 
         // ----- secondary function (right mouse, non-block) -----
-        if (secondary.kind != FnKind.Block && ms.rightButton.isPressed && cd1 <= 0f)
+        if (secondary.kind != FnKind.Block && KeyBinds.Secondary.IsPressed() && cd1 <= 0f)
             TryUse(secondary, 1);
 
         // ----- stamina -----
